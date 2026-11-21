@@ -1,0 +1,29 @@
+{
+  "name": "App équestre by MGM",
+  "short_name": "Ma DP",
+  "description": "Le carnet de demi-pension : séances, planning, soins, achats et épargne.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#faf8f6",
+  "theme_color": "#5b2e1a",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
