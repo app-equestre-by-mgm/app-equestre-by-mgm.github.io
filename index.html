@@ -291,6 +291,10 @@ body.locked{overflow:hidden}
 .fbb button{min-height:38px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:14px;font-weight:600}
 .fbb button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .nb{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--rose);color:#fff;font-size:13px;font-weight:700;margin-left:6px}
+
+.pk-admin{margin-top:36px;border:1px solid #ffffff45;background:#ffffff14;color:#fff;border-radius:999px;min-height:44px;padding:0 20px;font-weight:600;animation:rise .5s var(--ease) both .6s}
+.adu{padding:12px 0;border-bottom:1px solid var(--line)}
+.adu .ttl{overflow-wrap:anywhere}
 @media(max-width:420px){.hero{grid-template-columns:minmax(0,1fr);justify-items:center;text-align:center}.stat b{font-size:24px}dl{grid-template-columns:minmax(0,1fr);gap:2px}dd{margin-bottom:8px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
@@ -1230,6 +1234,32 @@ function openFbAdmin(){
   fbList();
 }
 async function fbCount(){if(!isAdmin())return;try{const r=await fbApi('?select=id&statut=eq.nouveau&type=like.DP*');const el=$('#fbn');if(el){el.textContent=r.length;el.hidden=!r.length}}catch(e){}}
+
+/* ---------- espace admin (seulement pour le compte admin, vérifié aussi côté Supabase) ---------- */
+const ADMIN_SQL="-- À lancer UNE fois dans Supabase : SQL Editor > New query > coller > Run.\n-- Espace admin de l'app équestre : seul gouissemmathys@gmail.com peut voir la liste des utilisateurs et leurs chiffres.\ncreate or replace function public.dp_admin_stats()\nreturns table(email text, prenom text, inscrit timestamptz, derniere_connexion timestamptz, derniere_activite timestamptz, chevaux text, nb_chevaux int, seances int)\nlanguage plpgsql security definer set search_path = public, auth as $$\nbegin\n  if lower(coalesce(auth.jwt() ->> 'email', '')) <> 'gouissemmathys@gmail.com' then\n    raise exception 'acces refuse';\n  end if;\n  return query\n  select u.email::text,\n         (u.raw_user_meta_data ->> 'prenom')::text,\n         u.created_at,\n         u.last_sign_in_at,\n         d.updated_at,\n         (select string_agg(h -> 'info' ->> 'nom', ', ') from jsonb_array_elements(case when jsonb_typeof(d.data -> 's' -> 'horses') = 'array' then d.data -> 's' -> 'horses' else '[]'::jsonb end) h where coalesce(h -> 'info' ->> 'nom', '') <> '')::text,\n         (select count(*) from jsonb_array_elements(case when jsonb_typeof(d.data -> 's' -> 'horses') = 'array' then d.data -> 's' -> 'horses' else '[]'::jsonb end) h where coalesce(h -> 'info' ->> 'nom', '') <> '')::int,\n         (select coalesce(sum(case when jsonb_typeof(h -> 'sessions') = 'array' then jsonb_array_length(h -> 'sessions') else 0 end), 0) from jsonb_array_elements(case when jsonb_typeof(d.data -> 's' -> 'horses') = 'array' then d.data -> 's' -> 'horses' else '[]'::jsonb end) h)::int\n  from auth.users u\n  join public.budget_docs d on d.user_id = u.id and d.key = 'dp-state'\n  order by d.updated_at desc;\nend $$;\nrevoke all on function public.dp_admin_stats() from public, anon;\ngrant execute on function public.dp_admin_stats() to authenticated;\n";
+async function adminStats(){const u=await sess();if(!u)throw new Error('session');return api('/rest/v1/rpc/dp_admin_stats',{method:'POST',body:'{}'},u.token)}
+const ago=t=>{if(!t)return'—';const d=Math.floor((Date.now()-new Date(t))/864e5);return d<=0?"aujourd'hui":d===1?'hier':`il y a ${d} j`};
+function openAdmin(){
+  if(!isAdmin())return;
+  openForm('Espace admin',[],{},()=>{},{okLabel:'Fermer',okGhost:1,
+    top:`<div id="adm"><p class="mute sm">Chargement…</p></div><button type="button" class="btn ghost wide" data-admfb style="margin-top:16px">Remarques reçues</button>`,
+    onClick:(e,close)=>{
+      if(e.target.closest('[data-admfb]')){close();openFbAdmin()}
+      if(e.target.closest('[data-admsql]')){const ok=()=>toast('Script copié');try{navigator.clipboard.writeText(ADMIN_SQL).then(ok).catch(()=>{$('#admsql').hidden=false})}catch(x){$('#admsql').hidden=false}}
+    }});
+  adminStats().then(rows=>{
+    const el=$('#adm');if(!el)return;
+    const act=rows.filter(r=>r.derniere_activite&&Date.now()-new Date(r.derniere_activite)<7*864e5).length;
+    const ch=rows.reduce((t,r)=>t+(r.nb_chevaux||0),0),se=rows.reduce((t,r)=>t+(r.seances||0),0);
+    el.innerHTML=`<div class="budget"><div><b>${rows.length}</b><span>utilisateur${rows.length>1?'s':''}</span></div><div><b>${act}</b><span>actifs ces 7 jours</span></div><div><b>${ch}</b><span>chevaux</span></div><div><b>${se}</b><span>séances notées</span></div></div>
+    <h4>Les utilisateurs</h4>${rows.length?rows.map(r=>`<div class="adu"><p class="ttl">${esc(r.prenom||r.email)}</p><p class="mute sm">${esc(r.email)}</p><div class="meta" style="margin-top:4px"><span>Inscrit le ${new Date(r.inscrit).toLocaleDateString('fr-FR')}</span><span>Actif ${ago(r.derniere_activite)}</span><span>${r.seances||0} séance${r.seances>1?'s':''}</span></div>${r.chevaux?`<div class="chips">${r.chevaux.split(', ').map(n=>`<span class="chip plain">${esc(n)}</span>`).join('')}</div>`:''}</div>`).join(''):'<p class="mute sm">Personne pour l’instant.</p>'}`;
+  }).catch(e=>{
+    const el=$('#adm');if(!el)return;
+    el.innerHTML=e.status===404||/dp_admin_stats|function/i.test(e.message||'')
+      ?`<p>Il manque une petite mise à jour dans Supabase pour voir les utilisateurs. Copie ce script, puis dans Supabase ouvre <b>SQL Editor › New query</b>, colle-le et appuie sur <b>Run</b>. À faire une seule fois.</p><button type="button" class="btn wide" data-admsql style="margin-top:12px">Copier le script</button><textarea id="admsql" hidden readonly style="margin-top:10px;min-height:160px;font-size:13px">${esc(ADMIN_SQL)}</textarea>`
+      :'<p class="mute sm">Impossible de charger les utilisateurs (connexion ?).</p>';
+  });
+}
 const acctCard=()=>`<div class="card" style="margin-top:14px"><p class="mute sm">Mon compte</p><p class="ttl" style="overflow-wrap:anywhere">${esc(USER.email)}</p><p class="mute sm">Tes données sont enregistrées en ligne et sur ce téléphone.</p><button class="btn ghost" data-a="logout" style="margin-top:10px">Se déconnecter</button></div>`;
 function askCal(){if(USER&&$('#auth').hidden&&$('#pick').hidden&&!S.cal.asked&&!document.querySelector('.ov'))openCal(true)}
 
@@ -1396,7 +1426,7 @@ if(isTop&&location.protocol==='https:'){
   if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(reg=>{
     document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')reg.update().catch(()=>{})});
   }).catch(()=>{});
-  const APP_V='5';
+  const APP_V='6';
   const checkV=()=>fetch('version.txt',{cache:'no-store'}).then(r=>r.ok?r.text():'').then(v=>{v=v.trim();let seen='';try{seen=sessionStorage.getItem('madp-rv')||''}catch(e){}
     if(v&&v!==APP_V&&v!==seen&&!document.querySelector('.ov')){try{sessionStorage.setItem('madp-rv',v)}catch(e){}location.reload()}}).catch(()=>{});
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkV()});
@@ -1416,7 +1446,7 @@ function showPicker(){
   el.className='';
   el.innerHTML=`<div class="pk-in"><p class="pk-k">${nm?`Coucou ${esc(nm)} !`:'Bienvenue !'}</p><h1>${L.length?"Qui monte aujourd'hui ?":'Ajoute ton cheval'}</h1>
   <div class="pk-grid${L.length?'':' pk-solo'}">${L.map((h,i)=>`<button class="pk-t" style="--i:${i}" data-pk="${h.id}"><span class="pk-av">${av(h.id)}</span><span class="pk-n">${esc(hName(h))}</span></button>`).join('')}
-  <button class="pk-t pk-add" style="--i:${L.length}" data-pk="+" aria-label="Ajouter un cheval"><span class="pk-av"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span><span class="pk-n">${L.length?'Ajouter':''}</span></button></div></div>`;
+  <button class="pk-t pk-add" style="--i:${L.length}" data-pk="+" aria-label="Ajouter un cheval"><span class="pk-av"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span><span class="pk-n">${L.length?'Ajouter':''}</span></button></div>${isAdmin()?'<button class="pk-admin" data-pkadmin>Espace admin</button>':''}</div>`;
   el.hidden=false;document.body.classList.add('locked');
 }
 function hidePicker(){const el=$('#pick');el.classList.add('out');setTimeout(()=>{el.hidden=true;el.className='';el.innerHTML='';if($('#auth').hidden)document.body.classList.remove('locked')},RM?0:420)}
@@ -1431,6 +1461,7 @@ function newHorseFlow(){
   });
 }
 $('#pick').addEventListener('click',e=>{
+  if(e.target.closest('[data-pkadmin]')){openAdmin();return}
   const b=e.target.closest('[data-pk]'),el=$('#pick');if(!b||el.classList.contains('picking'))return;
   if(b.dataset.pk==='+'){newHorseFlow();return}
   b.classList.add('chosen');el.classList.add('picking');
